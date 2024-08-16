@@ -1,5 +1,5 @@
 # Random-Password-Generator
-With this code you can generate any password with any length or type
+With this code you can generate any password with any length or type with GUI
 
 
   ¯\_(ツ)_/¯
