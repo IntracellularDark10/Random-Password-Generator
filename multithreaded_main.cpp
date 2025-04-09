@@ -20,6 +20,7 @@
 #include <QPalette>
 #include <QPushButton>
 
+// Function to generate a random password
 std::string generatePassword(int length, bool includeUpper, bool includeLower, bool includeDigits, bool includeSpecial) {
     const std::string upper_case = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const std::string lower_case = "abcdefghijklmnopqrstuvwxyz";
@@ -33,7 +34,7 @@ std::string generatePassword(int length, bool includeUpper, bool includeLower, b
     if (includeSpecial) all_chars += special_chars;
 
     if (all_chars.empty()) {
-        return "Error: No character sets selected.";
+        throw std::invalid_argument("No character sets selected.");
     }
 
     std::random_device rd;
@@ -47,14 +48,19 @@ std::string generatePassword(int length, bool includeUpper, bool includeLower, b
     return password;
 }
 
+// Function to be run in a separate thread
 void generatePasswordThread(int length, bool includeUpper, bool includeLower, bool includeDigits, bool includeSpecial, std::promise<std::string>&& passwordPromise) {
-    std::string password = generatePassword(length, includeUpper, includeLower, includeDigits, includeSpecial);
-    passwordPromise.set_value(password);
+    try {
+        std::string password = generatePassword(length, includeUpper, includeLower, includeDigits, includeSpecial);
+        passwordPromise.set_value(password);
+    } catch (const std::exception& e) {
+        passwordPromise.set_exception(std::current_exception());
+    }
 }
 
 // Settings dialog class for theme and color selection
 class SettingsDialog : public QDialog {
-    Q_OBJECT  // Added Q_OBJECT macro
+    Q_OBJECT
 
 public:
     SettingsDialog(QWidget *parent = nullptr) : QDialog(parent) {
@@ -176,7 +182,13 @@ int main(int argc, char *argv[]) {
     });
 
     QObject::connect(generateButton, &QPushButton::clicked, [&]() {
-        int length = lengthInput->text().toInt();
+        bool validInput = true;
+        int length = lengthInput->text().toInt(&validInput);
+        if (!validInput || length <= 0) {
+            passwordDisplay->setText("Error: Invalid password length.");
+            return;
+        }
+
         bool includeUpper = upperCaseCheckBox->isChecked();
         bool includeLower = lowerCaseCheckBox->isChecked();
         bool includeDigits = digitsCheckBox->isChecked();
@@ -188,15 +200,18 @@ int main(int argc, char *argv[]) {
 
         // Run password generation in a separate thread
         std::thread passwordThread(generatePasswordThread, length, includeUpper, includeLower, includeDigits, includeSpecial, std::move(passwordPromise));
-        passwordThread.detach();  // Detach thread to run independently
 
         // Wait for the result from the future and display it
-        passwordDisplay->setText(QString::fromStdString(passwordFuture.get()));
+        try {
+            passwordThread.join(); // Join the thread to ensure it completes
+            passwordDisplay->setText(QString::fromStdString(passwordFuture.get()));
+        } catch (const std::exception& e) {
+            passwordDisplay->setText(QString::fromStdString(e.what()));
+        }
     });
 
     window.show();
     return app.exec();
 }
 
-#include "moc_multithreaded_with_settings_main.cpp"  // Include the MOC generated file
-
+#include "moc_multithreaded_main.cpp"  // Include the MOC generated file
