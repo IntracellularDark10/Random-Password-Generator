@@ -1,0 +1,8 @@
+build/
+/PasswordGenerator
+/password_generator_multithreaded
+/test_generator
+*.o
+moc_*.cpp
+*.moc
+CMakeLists.txt.user
