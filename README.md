@@ -26,6 +26,19 @@ ctest --test-dir build --output-on-failure
 
 The programs end up in `build/`.
 
+## Container image
+
+Each release is also published as a container image on GitHub Packages. It contains both programs and needs an X11 display (XWayland works).
+
+```
+docker pull ghcr.io/intracellulardark10/random-password-generator:latest
+xhost +local:docker
+docker run --rm -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+  ghcr.io/intracellulardark10/random-password-generator:latest
+```
+
+The default command starts `password_generator_multithreaded`. Append `PasswordGenerator` to the `docker run` command for the simple window. Tags: `latest` and the release number without the `v` (for example `1.1.0`).
+
 ## Security notes
 
 - Characters are drawn from `std::random_device` directly. Old MinGW-w64 releases (GCC older than 9.2) have a deterministic `std::random_device`, so build on Linux, macOS, MSVC or a current MinGW-w64.
