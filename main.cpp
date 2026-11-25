@@ -1,96 +1,98 @@
 #include <QApplication>
-#include <QWidget>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
+#include <QCheckBox>
+#include <QClipboard>
+#include <QFontDatabase>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QString>
 #include <QTextEdit>
-#include <QCheckBox>
-#include <random>
+#include <QTextOption>
+#include <QVBoxLayout>
+#include <QWidget>
+
+#include <exception>
 #include <string>
 
-std::string generatePassword(int length, bool includeUpper, bool includeLower, bool includeDigits, bool includeSpecial) {
-    const std::string upper_case = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const std::string lower_case = "abcdefghijklmnopqrstuvwxyz";
-    const std::string digits = "0123456789";
-    const std::string special_chars = "!@#$%^&*()-_=+[]{}|;:',.<>?/`~";
-
-    std::string all_chars;
-    if (includeUpper) all_chars += upper_case;
-    if (includeLower) all_chars += lower_case;
-    if (includeDigits) all_chars += digits;
-    if (includeSpecial) all_chars += special_chars;
-
-    if (all_chars.empty()) {
-        return "Error: No character sets selected.";
-    }
-
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_int_distribution<> distribution(0, all_chars.size() - 1);
-
-    std::string password;
-    for (int i = 0; i < length; ++i) {
-        password += all_chars[distribution(generator)];
-    }
-    return password;
-}
+#include "password_generator.h"
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
 
     QWidget window;
     window.setWindowTitle("Password Generator");
+    auto *layout = new QVBoxLayout(&window);
 
-    QVBoxLayout *layout = new QVBoxLayout(&window);
+    layout->addWidget(new QLabel(QString("Enter the desired password length (1-%1):").arg(pwgen::kMaxLength)));
 
-    QLabel *label = new QLabel("Enter the desired password length:");
-    layout->addWidget(label);
-
-    QLineEdit *input = new QLineEdit();
+    auto *input = new QLineEdit("16");
     layout->addWidget(input);
 
-    QCheckBox *upperCheckBox = new QCheckBox("Include Uppercase Letters");
-    upperCheckBox->setChecked(true);
-    layout->addWidget(upperCheckBox);
+    auto *upperBox = new QCheckBox("Include Uppercase Letters");
+    auto *lowerBox = new QCheckBox("Include Lowercase Letters");
+    auto *digitsBox = new QCheckBox("Include Digits");
+    auto *specialBox = new QCheckBox("Include Special Characters");
+    auto *ambiguousBox = new QCheckBox("Exclude ambiguous characters (I, l, 1, O, 0)");
+    for (auto *box : {upperBox, lowerBox, digitsBox, specialBox}) {
+        box->setChecked(true);
+        layout->addWidget(box);
+    }
+    layout->addWidget(ambiguousBox);
 
-    QCheckBox *lowerCheckBox = new QCheckBox("Include Lowercase Letters");
-    lowerCheckBox->setChecked(true);
-    layout->addWidget(lowerCheckBox);
+    auto *generateButton = new QPushButton("Generate Password");
+    layout->addWidget(generateButton);
 
-    QCheckBox *digitsCheckBox = new QCheckBox("Include Digits");
-    digitsCheckBox->setChecked(true);
-    layout->addWidget(digitsCheckBox);
+    auto *status = new QLabel();
+    status->setStyleSheet("color: #c0392b;");
+    status->setWordWrap(true);
+    layout->addWidget(status);
 
-    QCheckBox *specialCheckBox = new QCheckBox("Include Special Characters");
-    specialCheckBox->setChecked(true);
-    layout->addWidget(specialCheckBox);
-
-    QPushButton *button = new QPushButton("Generate Password");
-    layout->addWidget(button);
-
-    QTextEdit *output = new QTextEdit();
+    auto *output = new QTextEdit();
     output->setReadOnly(true);
+    output->setWordWrapMode(QTextOption::WrapAnywhere);
+    output->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     layout->addWidget(output);
 
-    QObject::connect(button, &QPushButton::clicked, [&]() {
-        bool ok;
-        int length = input->text().toInt(&ok);
-        if (ok && length > 0) {
-            bool includeUpper = upperCheckBox->isChecked();
-            bool includeLower = lowerCheckBox->isChecked();
-            bool includeDigits = digitsCheckBox->isChecked();
-            bool includeSpecial = specialCheckBox->isChecked();
+    auto *copyButton = new QPushButton("Copy to Clipboard");
+    copyButton->setEnabled(false);
+    layout->addWidget(copyButton);
 
-            std::string password = generatePassword(length, includeUpper, includeLower, includeDigits, includeSpecial);
-            output->setText(QString::fromStdString(password));
-        } else {
-            output->setText("Please enter a valid positive integer.");
+    QObject::connect(input, &QLineEdit::returnPressed, generateButton, &QPushButton::click);
+
+    QObject::connect(generateButton, &QPushButton::clicked, [=]() {
+        bool ok = false;
+        const int length = input->text().trimmed().toInt(&ok);
+        if (!ok || length < 1 || length > pwgen::kMaxLength) {
+            output->clear();
+            copyButton->setEnabled(false);
+            status->setText(QString("Please enter a whole number from 1 to %1.").arg(pwgen::kMaxLength));
+            return;
+        }
+
+        pwgen::Options opts;
+        opts.length = length;
+        opts.upper = upperBox->isChecked();
+        opts.lower = lowerBox->isChecked();
+        opts.digits = digitsBox->isChecked();
+        opts.special = specialBox->isChecked();
+        opts.excludeAmbiguous = ambiguousBox->isChecked();
+
+        try {
+            output->setPlainText(QString::fromStdString(pwgen::generate(opts)));
+            status->clear();
+            copyButton->setEnabled(true);
+        } catch (const std::exception &e) {
+            output->clear();
+            copyButton->setEnabled(false);
+            status->setText(QString::fromUtf8(e.what()));
         }
     });
 
+    QObject::connect(copyButton, &QPushButton::clicked, [=]() {
+        QApplication::clipboard()->setText(output->toPlainText());
+    });
+
+    window.resize(420, 480);
     window.show();
     return app.exec();
 }
-

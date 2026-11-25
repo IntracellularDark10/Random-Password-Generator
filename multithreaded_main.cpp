@@ -1,217 +1,269 @@
+#include <QAction>
 #include <QApplication>
-#include <QWidget>
-#include <QVBoxLayout>
+#include <QCheckBox>
+#include <QClipboard>
+#include <QColor>
+#include <QColorDialog>
+#include <QComboBox>
+#include <QDialog>
+#include <QFontDatabase>
+#include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPushButton>
-#include <QTextEdit>
-#include <QCheckBox>
+#include <QMenu>
 #include <QMenuBar>
-#include <QThread>
-#include <random>
-#include <string>
-#include <thread>
-#include <future>
-#include <vector>
-#include <QDialog>
-#include <QComboBox>
-#include <QColorDialog>
 #include <QPalette>
 #include <QPushButton>
+#include <QSettings>
+#include <QString>
+#include <QStyle>
+#include <QTextEdit>
+#include <QTextOption>
+#include <QVBoxLayout>
+#include <QWidget>
+#include <QtConcurrent>
 
-// Function to generate a random password
-std::string generatePassword(int length, bool includeUpper, bool includeLower, bool includeDigits, bool includeSpecial) {
-    const std::string upper_case = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const std::string lower_case = "abcdefghijklmnopqrstuvwxyz";
-    const std::string digits = "0123456789";
-    const std::string special_chars = "!@#$%^&*()-_=+[]{}|;:',.<>?/`~";
+#include <exception>
+#include <string>
 
-    std::string all_chars;
-    if (includeUpper) all_chars += upper_case;
-    if (includeLower) all_chars += lower_case;
-    if (includeDigits) all_chars += digits;
-    if (includeSpecial) all_chars += special_chars;
+#include "password_generator.h"
 
-    if (all_chars.empty()) {
-        throw std::invalid_argument("No character sets selected.");
+namespace theme {
+
+const char *const kOrg = "IntracellularDark10";
+const char *const kApp = "RandomPasswordGenerator";
+
+QPalette build(const QString &mode, const QColor &accent) {
+    QPalette p = QApplication::style()->standardPalette();
+    if (mode == "Dark") {
+        p.setColor(QPalette::Window, QColor(53, 53, 53));
+        p.setColor(QPalette::WindowText, Qt::white);
+        p.setColor(QPalette::Base, QColor(42, 42, 42));
+        p.setColor(QPalette::AlternateBase, QColor(66, 66, 66));
+        p.setColor(QPalette::Text, Qt::white);
+        p.setColor(QPalette::Button, QColor(53, 53, 53));
+        p.setColor(QPalette::ButtonText, Qt::white);
+        p.setColor(QPalette::ToolTipBase, QColor(53, 53, 53));
+        p.setColor(QPalette::ToolTipText, Qt::white);
+        p.setColor(QPalette::Highlight, QColor(42, 130, 218));
+        p.setColor(QPalette::HighlightedText, Qt::black);
+        p.setColor(QPalette::Disabled, QPalette::WindowText, QColor(127, 127, 127));
+        p.setColor(QPalette::Disabled, QPalette::Text, QColor(127, 127, 127));
+        p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(127, 127, 127));
     }
-
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_int_distribution<> distribution(0, all_chars.size() - 1);
-
-    std::string password;
-    for (int i = 0; i < length; ++i) {
-        password += all_chars[distribution(generator)];
+    if (accent.isValid()) {
+        p.setColor(QPalette::Highlight, accent);
+        p.setColor(QPalette::HighlightedText, accent.lightness() > 128 ? Qt::black : Qt::white);
     }
-    return password;
+    return p;
 }
 
-// Function to be run in a separate thread
-void generatePasswordThread(int length, bool includeUpper, bool includeLower, bool includeDigits, bool includeSpecial, std::promise<std::string>&& passwordPromise) {
-    try {
-        std::string password = generatePassword(length, includeUpper, includeLower, includeDigits, includeSpecial);
-        passwordPromise.set_value(password);
-    } catch (const std::exception& e) {
-        passwordPromise.set_exception(std::current_exception());
-    }
+struct Saved {
+    QString mode = "Light";
+    QColor accent;  // invalid = theme default
+};
+
+Saved load() {
+    QSettings s(kOrg, kApp);
+    Saved r;
+    if (s.value("theme").toString() == "Dark") r.mode = "Dark";
+    r.accent = QColor(s.value("accent").toString());
+    return r;
 }
 
-// Settings dialog class for theme and color selection
+void save(const Saved &v) {
+    QSettings s(kOrg, kApp);
+    s.setValue("theme", v.mode);
+    s.setValue("accent", v.accent.isValid() ? v.accent.name() : QString());
+}
+
+}  // namespace theme
+
+// Changes preview live. "Apply" saves them; "Close" (or the window's X) restores
+// the palette that was active when the dialog opened.
 class SettingsDialog : public QDialog {
-    Q_OBJECT
-
 public:
-    SettingsDialog(QWidget *parent = nullptr) : QDialog(parent) {
+    explicit SettingsDialog(QWidget *parent = nullptr)
+        : QDialog(parent), originalPalette_(QApplication::palette()), state_(theme::load()) {
         setWindowTitle("Settings");
+        auto *layout = new QVBoxLayout(this);
 
-        QVBoxLayout *layout = new QVBoxLayout(this);
+        layout->addWidget(new QLabel("Select Theme:"));
+        auto *themeBox = new QComboBox();
+        themeBox->addItems({"Light", "Dark"});
+        themeBox->setCurrentText(state_.mode);
+        layout->addWidget(themeBox);
 
-        QLabel *themeLabel = new QLabel("Select Theme:");
-        layout->addWidget(themeLabel);
+        layout->addWidget(new QLabel("Select Accent Color:"));
+        auto *colorRow = new QHBoxLayout();
+        auto *colorButton = new QPushButton("Choose Color");
+        auto *resetButton = new QPushButton("Reset");
+        colorRow->addWidget(colorButton);
+        colorRow->addWidget(resetButton);
+        layout->addLayout(colorRow);
 
-        // Dropdown for light/dark theme selection
-        QComboBox *themeComboBox = new QComboBox();
-        themeComboBox->addItem("Light");
-        themeComboBox->addItem("Dark");
-        layout->addWidget(themeComboBox);
+        auto *buttonRow = new QHBoxLayout();
+        auto *applyButton = new QPushButton("Apply");
+        auto *closeButton = new QPushButton("Close");
+        buttonRow->addWidget(applyButton);
+        buttonRow->addWidget(closeButton);
+        layout->addLayout(buttonRow);
 
-        QLabel *accentColorLabel = new QLabel("Select Accent Color:");
-        layout->addWidget(accentColorLabel);
-
-        // Button to open color picker dialog
-        QPushButton *colorButton = new QPushButton("Choose Color");
-        layout->addWidget(colorButton);
-
-        // Apply and close buttons
-        QHBoxLayout *buttonLayout = new QHBoxLayout();
-        QPushButton *applyButton = new QPushButton("Apply");
-        QPushButton *closeButton = new QPushButton("Close");
-        buttonLayout->addWidget(applyButton);
-        buttonLayout->addWidget(closeButton);
-        layout->addLayout(buttonLayout);
-
-        // Signals and slots for theme and color selection
-        connect(themeComboBox, &QComboBox::currentTextChanged, this, [this, themeComboBox]() {
-            if (themeComboBox->currentText() == "Dark") {
-                applyDarkTheme();
-            } else {
-                applyLightTheme();
-            }
+        connect(themeBox, &QComboBox::currentTextChanged, this, [this](const QString &mode) {
+            state_.mode = mode;
+            preview();
         });
-
         connect(colorButton, &QPushButton::clicked, this, [this]() {
-            QColor chosenColor = QColorDialog::getColor(Qt::white, this, "Select Accent Color");
-            if (chosenColor.isValid()) {
-                applyAccentColor(chosenColor);
+            const QColor start = state_.accent.isValid() ? state_.accent : palette().highlight().color();
+            const QColor chosen = QColorDialog::getColor(start, this, "Select Accent Color");
+            if (chosen.isValid()) {
+                state_.accent = chosen;
+                preview();
             }
         });
-
-        connect(applyButton, &QPushButton::clicked, this, &QDialog::accept);
+        connect(resetButton, &QPushButton::clicked, this, [this]() {
+            state_.accent = QColor();
+            preview();
+        });
+        connect(applyButton, &QPushButton::clicked, this, [this]() {
+            theme::save(state_);
+            accept();
+        });
         connect(closeButton, &QPushButton::clicked, this, &QDialog::reject);
     }
 
+    void reject() override {
+        QApplication::setPalette(originalPalette_);
+        QDialog::reject();
+    }
+
 private:
-    void applyDarkTheme() {
-        QPalette darkPalette;
-        darkPalette.setColor(QPalette::Window, QColor(53, 53, 53));
-        darkPalette.setColor(QPalette::WindowText, Qt::white);
-        darkPalette.setColor(QPalette::Base, QColor(42, 42, 42));
-        darkPalette.setColor(QPalette::Text, Qt::white);
-        darkPalette.setColor(QPalette::Button, QColor(53, 53, 53));
-        darkPalette.setColor(QPalette::ButtonText, Qt::white);
-        QApplication::setPalette(darkPalette);
-    }
+    void preview() { QApplication::setPalette(theme::build(state_.mode, state_.accent)); }
 
-    void applyLightTheme() {
-        QApplication::setPalette(QApplication::style()->standardPalette());
-    }
+    QPalette originalPalette_;
+    theme::Saved state_;
+};
 
-    void applyAccentColor(const QColor &color) {
-        QPalette palette = QApplication::palette();
-        palette.setColor(QPalette::Highlight, color);
-        QApplication::setPalette(palette);
-    }
+struct Result {
+    bool ok = false;
+    QString text;
 };
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
+    app.setStyle("Fusion");  // native styles on some platforms ignore palettes
+    {
+        const theme::Saved saved = theme::load();
+        QApplication::setPalette(theme::build(saved.mode, saved.accent));
+    }
 
     QWidget window;
     window.setWindowTitle("Password Generator");
+    auto *layout = new QVBoxLayout(&window);
 
-    QVBoxLayout *layout = new QVBoxLayout(&window);
-
-    // Menu bar for settings
-    QMenuBar *menuBar = new QMenuBar(&window);
-    QMenu *settingsMenu = menuBar->addMenu("☰ Settings");
-    QAction *themeAction = new QAction("Customize Appearance", &window);
-    settingsMenu->addAction(themeAction);
+    auto *menuBar = new QMenuBar(&window);
+    QMenu *settingsMenu = menuBar->addMenu("Settings");
+    QAction *themeAction = settingsMenu->addAction("Customize Appearance");
     layout->setMenuBar(menuBar);
 
-    QLabel *label = new QLabel("Enter the desired password length:");
-    layout->addWidget(label);
+    layout->addWidget(new QLabel(QString("Enter the desired password length (1-%1):").arg(pwgen::kMaxLength)));
 
-    QLineEdit *lengthInput = new QLineEdit();
-    layout->addWidget(lengthInput);
+    auto *input = new QLineEdit("16");
+    layout->addWidget(input);
 
-    // Checkbox options for password criteria
-    QCheckBox *upperCaseCheckBox = new QCheckBox("Include Upper-case Letters");
-    QCheckBox *lowerCaseCheckBox = new QCheckBox("Include Lower-case Letters");
-    QCheckBox *digitsCheckBox = new QCheckBox("Include Digits");
-    QCheckBox *specialCharsCheckBox = new QCheckBox("Include Special Characters");
+    auto *upperBox = new QCheckBox("Include Upper-case Letters");
+    auto *lowerBox = new QCheckBox("Include Lower-case Letters");
+    auto *digitsBox = new QCheckBox("Include Digits");
+    auto *specialBox = new QCheckBox("Include Special Characters");
+    auto *ambiguousBox = new QCheckBox("Exclude ambiguous characters (I, l, 1, O, 0)");
+    for (auto *box : {upperBox, lowerBox, digitsBox, specialBox}) {
+        box->setChecked(true);
+        layout->addWidget(box);
+    }
+    layout->addWidget(ambiguousBox);
 
-    layout->addWidget(upperCaseCheckBox);
-    layout->addWidget(lowerCaseCheckBox);
-    layout->addWidget(digitsCheckBox);
-    layout->addWidget(specialCharsCheckBox);
-
-    // Button to generate password
-    QPushButton *generateButton = new QPushButton("Generate Password");
+    auto *generateButton = new QPushButton("Generate Password");
     layout->addWidget(generateButton);
 
-    // Text area to display the generated password
-    QTextEdit *passwordDisplay = new QTextEdit();
-    layout->addWidget(passwordDisplay);
+    auto *status = new QLabel();
+    status->setWordWrap(true);
+    layout->addWidget(status);
 
-    // Event to open the settings dialog
-    QObject::connect(themeAction, &QAction::triggered, [&]() {
-        SettingsDialog settingsDialog(&window);
-        settingsDialog.exec();
+    auto *output = new QTextEdit();
+    output->setReadOnly(true);
+    output->setWordWrapMode(QTextOption::WrapAnywhere);
+    output->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    layout->addWidget(output);
+
+    auto *copyButton = new QPushButton("Copy to Clipboard");
+    copyButton->setEnabled(false);
+    layout->addWidget(copyButton);
+
+    QObject::connect(themeAction, &QAction::triggered, &window, [&window]() {
+        SettingsDialog dialog(&window);
+        dialog.exec();
     });
 
-    QObject::connect(generateButton, &QPushButton::clicked, [&]() {
-        bool validInput = true;
-        int length = lengthInput->text().toInt(&validInput);
-        if (!validInput || length <= 0) {
-            passwordDisplay->setText("Error: Invalid password length.");
+    QObject::connect(input, &QLineEdit::returnPressed, generateButton, &QPushButton::click);
+
+    QObject::connect(generateButton, &QPushButton::clicked, &window, [=, &window]() {
+        bool ok = false;
+        const int length = input->text().trimmed().toInt(&ok);
+        if (!ok || length < 1 || length > pwgen::kMaxLength) {
+            output->clear();
+            copyButton->setEnabled(false);
+            status->setStyleSheet("color: #c0392b;");
+            status->setText(QString("Please enter a whole number from 1 to %1.").arg(pwgen::kMaxLength));
             return;
         }
 
-        bool includeUpper = upperCaseCheckBox->isChecked();
-        bool includeLower = lowerCaseCheckBox->isChecked();
-        bool includeDigits = digitsCheckBox->isChecked();
-        bool includeSpecial = specialCharsCheckBox->isChecked();
+        pwgen::Options opts;
+        opts.length = length;
+        opts.upper = upperBox->isChecked();
+        opts.lower = lowerBox->isChecked();
+        opts.digits = digitsBox->isChecked();
+        opts.special = specialBox->isChecked();
+        opts.excludeAmbiguous = ambiguousBox->isChecked();
 
-        // Create a promise and future to handle multithreading
-        std::promise<std::string> passwordPromise;
-        std::future<std::string> passwordFuture = passwordPromise.get_future();
+        generateButton->setEnabled(false);
+        copyButton->setEnabled(false);
+        status->setStyleSheet(QString());
+        status->setText("Generating...");
 
-        // Run password generation in a separate thread
-        std::thread passwordThread(generatePasswordThread, length, includeUpper, includeLower, includeDigits, includeSpecial, std::move(passwordPromise));
-
-        // Wait for the result from the future and display it
-        try {
-            passwordThread.join(); // Join the thread to ensure it completes
-            passwordDisplay->setText(QString::fromStdString(passwordFuture.get()));
-        } catch (const std::exception& e) {
-            passwordDisplay->setText(QString::fromStdString(e.what()));
-        }
+        // Runs on the Qt thread pool; the UI thread stays responsive.
+        auto *watcher = new QFutureWatcher<Result>(&window);
+        QObject::connect(watcher, &QFutureWatcher<Result>::finished, &window, [=]() {
+            const Result r = watcher->result();
+            if (r.ok) {
+                output->setPlainText(r.text);
+                status->clear();
+                copyButton->setEnabled(true);
+            } else {
+                output->clear();
+                status->setStyleSheet("color: #c0392b;");
+                status->setText(r.text);
+            }
+            generateButton->setEnabled(true);
+            watcher->deleteLater();
+        });
+        watcher->setFuture(QtConcurrent::run([opts]() {
+            Result r;
+            try {
+                r.text = QString::fromStdString(pwgen::generate(opts));
+                r.ok = true;
+            } catch (const std::exception &e) {
+                r.text = QString::fromUtf8(e.what());
+            }
+            return r;
+        }));
     });
 
+    QObject::connect(copyButton, &QPushButton::clicked, &window, [=]() {
+        QApplication::clipboard()->setText(output->toPlainText());
+    });
+
+    window.resize(420, 500);
     window.show();
     return app.exec();
 }
-
-#include "moc_multithreaded_main.cpp"  // Include the MOC generated file
